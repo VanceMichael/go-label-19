@@ -39,10 +39,14 @@ func (r *Registry) Run(ctx context.Context) []Status {
 		checks = append(checks, namedCheck{name: name, fn: r.checks[name]})
 	}
 	r.mu.RUnlock()
-	out := make([]Status, 0, len(checks))
+	// Pre-assign one slot per check in registration order so every registered
+	// check produces exactly one result and the output order is stable. Each
+	// goroutine writes only to its own index, so the concurrent writes never
+	// alias and pending.Wait establishes a happens-before edge for the caller.
+	out := make([]Status, len(checks))
 	var pending sync.WaitGroup
-	for _, check := range checks {
-		check := check
+	for index, check := range checks {
+		index, check := index, check
 		pending.Add(1)
 		go func() {
 			defer pending.Done()
@@ -52,7 +56,7 @@ func (r *Registry) Run(ctx context.Context) []Status {
 			if err != nil {
 				status.Error = err.Error()
 			}
-			out = append(out, status)
+			out[index] = status
 		}()
 	}
 	pending.Wait()
